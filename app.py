@@ -11,9 +11,10 @@ from lunar_python import Solar, Lunar
 
 st.set_page_config(page_title="命理全景解析", layout="wide")
 
-# 在網頁標頭與側邊欄嵌入 Google AdSense 正式發布商程式碼
+# 在網頁標頭中注入 Google AdSense 中繼標籤與正式追蹤碼
 st.markdown("""
 <head>
+    <meta name="google-adsense-account" content="ca-pub-2265722719270125">
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2265722719270125" crossorigin="anonymous"></script>
 </head>
 <style>
@@ -547,7 +548,7 @@ if exec_btn:
         status_placeholder.success("✅ **AI 處理狀態：報告生成完畢！**")
         
         st.session_state.gemini_report = gemini_res
-        st.session_state.export_text = f"""# 命理詳算系統報告
+        st.session_text_export = f"""# 命理詳算系統報告
 生成時間：{datetime.now().strftime("%Y-%m-%d %H:%M")}
 命盤生辰設定：{birth_dt.strftime("%Y-%m-%d %H:%M")} ({lunar_str})
 出生地點：{input_location if input_location else "未指定"}
@@ -565,6 +566,7 @@ MBTI 類型：{input_mbti if input_mbti else "未填寫"}
 【GEMINI 專家深度專家詳解報告】
 {gemini_res}
 """
+        st.session_state.export_text = st.session_text_export
         st.rerun()
 
 if st.session_state.gemini_report:
