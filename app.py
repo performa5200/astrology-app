@@ -83,7 +83,7 @@ def send_feedback_email(feedback_text):
     except Exception as e:
         print(f"郵件發送失敗: {e}")
 
-# ----------------- 1. Gemini 調用模組 -----------------
+# ----------------- 1. Gemini 調用模組 (含動態狀態反饋) -----------------
 def _get_gemini_models_dynamic(key):
     try:
         clean_k = str(key).strip().strip("[]'\"")
@@ -97,36 +97,33 @@ def _get_gemini_models_dynamic(key):
         pass
     return ["gemini-2.0-flash", "gemini-1.5-flash"]
 
-def _worker_fetch_gemini(key, key_masked, prompt_text):
-    active_models = _get_gemini_models_dynamic(key)
-    clean_k = str(key).strip().strip("[]'\"")
-    last_err = ""
-    for model_name in active_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_k}"
-        payload = {"contents": [{"parts": [{"text": prompt_text}]}], "generationConfig": {"temperature": 0.4, "topP": 0.9, "maxOutputTokens": 8192}}
-        try:
-            response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
-            if response.status_code == 200:
-                parts = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
-                full_text = "".join([p.get("text", "") for p in parts if "text" in p])
-                if full_text.strip():
-                    return True, key_masked, model_name, full_text
-            last_err = f"狀態碼 {response.status_code}: {response.text[:120]}"
-        except Exception as e:
-            last_err = str(e)
-    return False, key_masked, "Gemini", last_err
-
-def call_gemini_api(prompt_text, keys):
+def call_gemini_api_dynamic(prompt_text, keys, status_box):
     if not keys:
         return "【未配置 Gemini Key】請確認已在本機設定 api_key.txt 或在雲端後台設定 Secrets。"
+    
     unique_keys = list(set(keys))
-    with ThreadPoolExecutor(max_workers=min(len(unique_keys), 8)) as executor:
-        futures = {executor.submit(_worker_fetch_gemini, k, k[:6] + "...", prompt_text): k for k in unique_keys}
-        for future in as_completed(futures):
-            success, key_id, model, res = future.result()
-            if success:
-                return res
-    return "### ❌ Gemini 呼叫失敗，請確認 API Key 是否有效。"
+    for i, k in enumerate(unique_keys):
+        status_box.info(f"⏳ **AI 處理狀態：正在調用第 {i+1} 組金鑰中，請稍候...**")
+        active_models = _get_gemini_models_dynamic(k)
+        clean_k = str(k).strip().strip("[]'\"")
+        
+        for model_name in active_models:
+            status_box.info(f"⏳ **AI 處理狀態：嘗試使用模型 [{model_name}] 進行推理...**")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_k}"
+            payload = {"contents": [{"parts": [{"text": prompt_text}]}], "generationConfig": {"temperature": 0.4, "topP": 0.9, "maxOutputTokens": 8192}}
+            try:
+                response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
+                if response.status_code == 200:
+                    parts = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                    full_text = "".join([p.get("text", "") for p in parts if "text" in p])
+                    if full_text.strip():
+                        return full_text
+                else:
+                    status_box.warning(f"⚠️ **金鑰額度異常或超限 (狀態碼 {response.status_code})，已超過金鑰上限，正在切換中...**")
+            except Exception as e:
+                status_box.warning(f"⚠️ **連線逾時或發生例外，正在更換金鑰中...**")
+    
+    return "### ❌ 所有 Gemini 金鑰均呼叫失敗或額度已滿，請更換有效 API Key。"
 
 # ----------------- 2. 曆法與星曆計算核心 -----------------
 PALACES_NAMES = ["命宮", "兄弟宮", "夫妻宮", "子女宮", "財帛宮", "疾厄宮", "遷移宮", "交友宮", "官祿宮", "田宅宮", "福德宮", "父母宮"]
@@ -262,8 +259,8 @@ if "last_exec_time" not in st.session_state:
 # UI 介面
 st.title("🌌 命理全景解析")
 
-# 使用 st.form 防止填寫欄位時游標亂跳
-with st.form("input_form"):
+# 移除 st.form，改用普通容器，避免 Enter 鍵誤觸送出
+with st.container():
     st.markdown("<b>🎛️ 生辰、地理與心理特質參數設定</b>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 1.2, 1])
     with c1:
@@ -282,7 +279,7 @@ with st.form("input_form"):
     input_focus_custom = st.text_input("💡 我想多了解哪部分（自由填寫，例如：想了解人際溝通盲點、特定專案瓶頸、或心態調整）", value="", key="f_focus")
     input_feedback = st.text_area("💬 意見回饋 (選填，歡迎留下您的寶貴建議或使用心得)", value="", height=70, key="f_feed")
 
-    # 計算冷卻剩餘時間 (改為 10 秒)
+    # 計算 10 秒冷卻倒數與自動解鎖機制
     cooldown_total = 10
     time_passed = py_time.time() - st.session_state.last_exec_time
     is_cooling_down = time_passed < cooldown_total
@@ -291,11 +288,15 @@ with st.form("input_form"):
     if is_cooling_down:
         btn_label = f"⏳ 冷卻中 ({remaining_cooldown}秒)"
         btn_disabled = True
+        # 利用 st.empty 自動觸發畫面每秒刷新，直到冷卻結束解除按鈕鎖定
+        py_time.sleep(1)
+        st.rerun()
     else:
         btn_label = "🚀 開始 Gemini 專家深度詳算"
         btn_disabled = False
 
-    exec_btn = st.form_submit_button(btn_label, disabled=btn_disabled, type="primary")
+    # 必須透過滑鼠點擊按鈕
+    exec_btn = st.button(btn_label, disabled=btn_disabled, type="primary", use_container_width=False)
 
 # AI 處理狀態容器
 status_placeholder = st.empty()
@@ -472,8 +473,6 @@ if exec_btn:
         if input_feedback.strip():
             send_feedback_email(input_feedback)
 
-        status_placeholder.info("⏳ **AI 處理狀態：Gemini 專家正在進行四系統命理、MBTI 心理學與自定義關注點的交叉深度推理，請稍候……**")
-        
         full_chart_summary = {
             "生辰與地理參數": {"公曆": birth_dt.strftime("%Y-%m-%d %H:%M"), "農曆": lunar_str, "性別": input_gender, "出生地點": input_location if input_location else "未指定", "MBTI人格類型": input_mbti if input_mbti else "未填寫", "特別關注點 (使用者自定義)": input_focus_custom if input_focus_custom else "無特別指定", "使用者意見回饋": input_feedback if input_feedback else "無", "計算年齡": f"約 {calculated_age} 歲", "生命階段與分析重心": life_stage_desc},
             "東方排盤": {"八字": bazi, "紫微完整十二宮": ziwei},
@@ -526,7 +525,8 @@ if exec_btn:
 
 請以 Markdown 格式輸出結構清晰、論述深刻的四系統交叉分析報告：
 """
-        gemini_res = call_gemini_api(prompt, gemini_keys)
+        # 呼叫動態狀態回饋的 AI 模組
+        gemini_res = call_gemini_api_dynamic(prompt, gemini_keys, status_placeholder)
         
         # 更新最後執行時間戳記以啟動 10 秒冷卻
         st.session_state.last_exec_time = py_time.time()
