@@ -282,8 +282,8 @@ with st.form("input_form"):
     input_focus_custom = st.text_input("💡 我想多了解哪部分（自由填寫，例如：想了解人際溝通盲點、特定專案瓶頸、或心態調整）", value="", key="f_focus")
     input_feedback = st.text_area("💬 意見回饋 (選填，歡迎留下您的寶貴建議或使用心得)", value="", height=70, key="f_feed")
 
-    # 計算冷卻剩餘時間 (180秒)
-    cooldown_total = 180
+    # 計算冷卻剩餘時間 (改為 10 秒)
+    cooldown_total = 10
     time_passed = py_time.time() - st.session_state.last_exec_time
     is_cooling_down = time_passed < cooldown_total
     remaining_cooldown = math.ceil(cooldown_total - time_passed)
@@ -528,7 +528,7 @@ if exec_btn:
 """
         gemini_res = call_gemini_api(prompt, gemini_keys)
         
-        # 更新最後執行時間戳記以啟動 180 秒冷卻
+        # 更新最後執行時間戳記以啟動 10 秒冷卻
         st.session_state.last_exec_time = py_time.time()
         
         status_placeholder.success("✅ **AI 處理狀態：報告生成完畢！**")
