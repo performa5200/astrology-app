@@ -11,7 +11,11 @@ from lunar_python import Solar, Lunar
 
 st.set_page_config(page_title="命理全景解析", layout="wide")
 
+# 在網頁標頭與側邊欄嵌入 Google AdSense 正式發布商程式碼
 st.markdown("""
+<head>
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2265722719270125" crossorigin="anonymous"></script>
+</head>
 <style>
 /* 讓整體畫面內容集中在中間 2/3 寬度，兩側留白放置廣告 */
 .block-container {
@@ -41,14 +45,16 @@ st.markdown("""
 }
 </style>
 
-<!-- 左右側邊浮動廣告嵌入區塊 -->
+<!-- 左右側邊 Google AdSense 廣告嵌入區塊 -->
 <div class="side-ad-left">
-    <b>贊助廣告</b><br><br>
-    Google AdSense<br>垂直側邊廣告位<br>(140x600)
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2265722719270125" crossorigin="anonymous"></script>
+    <ins class="adsbygoogle" style="display:inline-block;width:120px;height:550px" data-ad-client="ca-pub-2265722719270125"></ins>
+    <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
 </div>
 <div class="side-ad-right">
-    <b>贊助廣告</b><br><br>
-    Google AdSense<br>垂直側邊廣告位<br>(140x600)
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2265722719270125" crossorigin="anonymous"></script>
+    <ins class="adsbygoogle" style="display:inline-block;width:120px;height:550px" data-ad-client="ca-pub-2265722719270125"></ins>
+    <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
 </div>
 """, unsafe_allow_html=True)
 
@@ -497,7 +503,7 @@ if exec_btn:
         mbti_instruction = f"當事人的 MBTI 心理類型為：**{input_mbti}**。" if input_mbti.strip() else "當事人未填寫 MBTI，請依據命盤本身的心理特質進行推導。"
 
         prompt = f"""
-你是一位專業, 客觀且具備深厚洞察力的資深戰略顧問與人生教練。請嚴格根據我提供的命理排盤資料（八字、紫微斗數全十二宮、西洋占星、人類圖）以及當事人的相關心理與自定義特質，使用「四系統交叉分析」的方式來全面解讀全盤綜合解析報告。
+你是一位專業、客觀且具備深厚洞察力的資深戰略顧問與人生教練。請嚴格根據我提供的命理排盤資料（八字、紫微斗數全十二宮、西洋占星、人類圖）以及當事人的相關心理與自定義特質，使用「四系統交叉分析」的方式來全面解讀全盤綜合解析報告。
 
 {mbti_instruction}
 {custom_focus_instruction}
