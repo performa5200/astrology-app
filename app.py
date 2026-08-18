@@ -71,15 +71,17 @@ def load_keys_from_file(filename="api_key.txt"):
 
 def send_feedback_email(feedback_text):
     try:
-        sender = st.secrets["EMAIL_USER"]
-        password = st.secrets["EMAIL_PASS"]
-        msg = MIMEText(f"收到新使用者意見回饋：\n\n{feedback_text}")
-        msg["Subject"] = "命理系統意見回饋"
+        sender = st.secrets.get("EMAIL_USER", "performa5200@gmail.com")
+        password = st.secrets.get("EMAIL_PASS", "")
+        if not password:
+            return
+        msg = MIMEText(f"收到新使用者意見回饋：\n\n{feedback_text}", "plain", "utf-8")
+        msg["Subject"] = "命理系統使用者意見回饋"
         msg["From"] = sender
         msg["To"] = "performa5200@gmail.com"
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(sender, password)
-            server.sendmail(sender, "performa5200@gmail.com", msg.as_string())
+            server.sendmail(sender, ["performa5200@gmail.com"], msg.as_string())
     except Exception as e:
         print(f"郵件發送失敗: {e}")
 
@@ -95,7 +97,7 @@ def _get_gemini_models_dynamic(key):
             return sorted(valid, key=lambda x: (0 if "flash" in x else 1, 0 if "2" in x else 1))
     except Exception:
         pass
-    return ["gemini-2.0-flash", "gemini-1.5-flash"]
+    return ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 
 def call_gemini_api_dynamic(prompt_text, keys, status_box):
     if not keys:
@@ -105,7 +107,7 @@ def call_gemini_api_dynamic(prompt_text, keys, status_box):
     for i, k in enumerate(unique_keys):
         status_box.info(f"⏳ **AI 處理狀態：正在調用第 {i+1} 組金鑰中，請稍候...**")
         active_models = _get_gemini_models_dynamic(k)
-        clean_k = str(k).strip().strip("[]'\"")
+        clean_k = str(key).strip().strip("[]'\"") if (key := k) else ""
         
         for model_name in active_models:
             status_box.info(f"⏳ **AI 處理狀態：嘗試使用模型 [{model_name}] 進行推理...**")
@@ -120,8 +122,8 @@ def call_gemini_api_dynamic(prompt_text, keys, status_box):
                         return full_text
                 else:
                     status_box.warning(f"⚠️ **金鑰額度異常或超限 (狀態碼 {response.status_code})，已超過金鑰上限，正在切換中...**")
-            except Exception as e:
-                status_box.warning(f"⚠️ **連線逾時或發生例外，正在更換金鑰中...**")
+            except Exception:
+                status_box.warning("⚠️ **連線逾時或發生例外，正在更換金鑰中...**")
     
     return "### ❌ 所有 Gemini 金鑰均呼叫失敗或額度已滿，請更換有效 API Key。"
 
@@ -256,10 +258,13 @@ if "last_params" not in st.session_state:
 if "last_exec_time" not in st.session_state:
     st.session_state.last_exec_time = 0.0
 
+# 建立 24 小時每 10 分鐘下拉選單選項 (共 144 個時間點)
+time_options = [f"{h:02d}:{m:02d}" for h in range(24) for m in range(0, 60, 10)]
+
 # UI 介面
 st.title("🌌 命理全景解析")
 
-# 移除 st.form，改用普通容器，避免 Enter 鍵誤觸送出
+# 一般容器，不使用 st.form，避免 Enter 鍵誤觸送出
 with st.container():
     st.markdown("<b>🎛️ 生辰、地理與心理特質參數設定</b>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 1.2, 1])
@@ -268,7 +273,10 @@ with st.container():
     with c2:
         input_date = st.date_input("出生公曆日期", value=date(2000, 1, 1), min_value=date(1900, 1, 1), max_value=date(2100, 12, 31), key="f_dt")
     with c3:
-        input_time = st.time_input("出生時間 (24h)", value=time(0, 0), key="f_tm")
+        # 下拉選單選擇出生時間
+        selected_time_str = st.selectbox("出生時間 (24h 下拉選擇)", time_options, index=0, key="f_time_select")
+        sel_h, sel_m = map(int, selected_time_str.split(":"))
+        input_time = time(sel_h, sel_m)
 
     gc1, gc2 = st.columns([1.5, 1])
     with gc1:
@@ -288,7 +296,6 @@ with st.container():
     if is_cooling_down:
         btn_label = f"⏳ 冷卻中 ({remaining_cooldown}秒)"
         btn_disabled = True
-        # 利用 st.empty 自動觸發畫面每秒刷新，直到冷卻結束解除按鈕鎖定
         py_time.sleep(1)
         st.rerun()
     else:
@@ -464,12 +471,12 @@ st.divider()
 gemini_keys = load_keys_from_file("api_key.txt")
 
 if exec_btn:
-    is_default_params = (input_date == date(2000, 1, 1) and input_time == time(0, 0) and not input_location.strip() and not input_mbti.strip() and not input_focus_custom.strip())
+    is_default_params = (input_date == date(2000, 1, 1) and selected_time_str == "00:00" and not input_location.strip() and not input_mbti.strip() and not input_focus_custom.strip())
     
     if is_default_params:
         status_placeholder.warning("⚠️ **請先修改或填寫您的生辰與出生地點等個人參數，才能進行 AI 專家深度詳算！**")
     else:
-        # 若有填寫意見回饋，自動寄信至指定信箱
+        # 若有填寫意見回饋，自動主動寄信至指定信箱
         if input_feedback.strip():
             send_feedback_email(input_feedback)
 
