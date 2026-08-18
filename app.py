@@ -4,6 +4,7 @@ import os
 import re
 import math
 import requests
+import time as py_time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, time, timedelta
 from lunar_python import Solar, Lunar
@@ -12,7 +13,7 @@ st.set_page_config(page_title="命理全景解析", layout="wide")
 
 st.markdown("""
 <style>
-/* 讓整體畫面內容集中在中間 2/3 寬度，兩側留白 */
+/* 讓整體畫面內容集中在中間 2/3 寬度，兩側留白放置廣告 */
 .block-container {
     max-width: 68% !important;
     padding-left: 3rem !important;
@@ -31,11 +32,27 @@ st.markdown("""
 .tag-hd { background: #4a3425; color: #ffb86c; border: 1px solid #7c583f; }
 .section-header { font-size: 16px; font-weight: bold; padding-bottom: 6px; border-bottom: 2px solid #30363d; margin-bottom: 12px; }
 .native-interpret { background-color: #1c212b; border-left: 3px solid #58a6ff; padding: 10px; margin-top: 10px; font-size: 13px; color: #c9d1d9; border-radius: 0 4px 4px 0; }
+
+/* 側邊浮動廣告區塊樣式 */
+.side-ad-left { position: fixed; left: 10px; top: 120px; width: 140px; height: 600px; background: #161b22; border: 1px dashed #30363d; border-radius: 8px; text-align: center; padding-top: 20px; color: #8b949e; font-size: 12px; z-index: 99; }
+.side-ad-right { position: fixed; right: 10px; top: 120px; width: 140px; height: 600px; background: #161b22; border: 1px dashed #30363d; border-radius: 8px; text-align: center; padding-top: 20px; color: #8b949e; font-size: 12px; z-index: 99; }
+@media(max-width: 1300px) {
+  .side-ad-left, .side-ad-right { display: none; }
+}
 </style>
+
+<!-- 左右側邊浮動廣告嵌入區塊 -->
+<div class="side-ad-left">
+    <b>贊助廣告</b><br><br>
+    Google AdSense<br>垂直側邊廣告位<br>(140x600)
+</div>
+<div class="side-ad-right">
+    <b>贊助廣告</b><br><br>
+    Google AdSense<br>垂直側邊廣告位<br>(140x600)
+</div>
 """, unsafe_allow_html=True)
 
 def load_keys_from_file(filename="api_key.txt"):
-    # 1. 優先讀取雲端 Streamlit Secrets 裡的多組金鑰
     try:
         if "GEMINI_API_KEY" in st.secrets:
             secret_key = st.secrets["GEMINI_API_KEY"]
@@ -46,7 +63,6 @@ def load_keys_from_file(filename="api_key.txt"):
     except Exception:
         pass
 
-    # 2. 如果沒有雲端 Secrets（例如在本機執行），則讀取本地的 api_key.txt
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [os.path.join(base_dir, filename), os.path.join(base_dir, filename.lower()), os.path.join(base_dir, filename + ".txt"), filename]
     target_path = next((p for p in candidates if os.path.exists(p) and os.path.isfile(p)), None)
@@ -240,6 +256,8 @@ if "export_text" not in st.session_state:
     st.session_state.export_text = None
 if "last_params" not in st.session_state:
     st.session_state.last_params = None
+if "last_exec_time" not in st.session_state:
+    st.session_state.last_exec_time = 0.0
 
 # UI 介面
 st.title("🌌 命理全景解析")
@@ -261,6 +279,7 @@ with st.container():
         input_mbti = st.text_input("MBTI 人格類型 (選填，供交叉比對)", value="")
 
     input_focus_custom = st.text_input("💡 我想多了解哪部分（自由填寫，例如：想了解人際溝通盲點、特定專案瓶頸、或心態調整）", value="")
+    input_feedback = st.text_area("💬 意見回饋 (選填，歡迎留下您的寶貴建議或使用心得)", value="", height=70)
 
 # 計算當事人至 2026 年的實際年齡與生命階段
 today_year = 2026
@@ -293,6 +312,7 @@ pure_chart_data = f"""# 四系統純命盤結構數據 (含 MBTI 整合)
 計算年齡：約 {calculated_age} 歲 ({life_stage_desc})
 MBTI 類型：{input_mbti if input_mbti else "未填寫"}
 特別關注：{input_focus_custom if input_focus_custom else "無特別指定"}
+使用者回饋：{input_feedback if input_feedback else "無"}
 
 ==================================================
 1. 【八字系統 (子平四柱)】
@@ -327,10 +347,24 @@ pure_chart_data += f"""
 已定義中心: {', '.join(human_design['已定義中心'])}
 """
 
+# 計算冷卻剩餘時間 (180秒 = 3分鐘)
+cooldown_total = 180
+time_passed = py_time.time() - st.session_state.last_exec_time
+is_cooling_down = time_passed < cooldown_total
+remaining_cooldown = math.ceil(cooldown_total - time_passed)
+
+# 動態按鈕文字與狀態
+if is_cooling_down:
+    btn_label = f"⏳ 冷卻中 ({remaining_cooldown}秒)"
+    btn_disabled = True
+else:
+    btn_label = "🚀 開始 Gemini 專家深度詳算"
+    btn_disabled = False
+
 # 同一列按鈕配置：[Gemini詳算] | [下載純命盤] | [輸出完整報告]
 col_btn1, col_btn2, col_btn3 = st.columns(3)
 with col_btn1:
-    exec_btn = st.button("🚀 開始 Gemini 專家深度詳算", type="primary", use_container_width=True)
+    exec_btn = st.button(btn_label, type="primary", use_container_width=True, disabled=btn_disabled)
 with col_btn2:
     st.download_button(
         label="💾 下載純命盤 (無AI解析)",
@@ -430,26 +464,40 @@ st.divider()
 gemini_keys = load_keys_from_file("api_key.txt")
 
 if exec_btn:
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔑 金鑰讀取: Gemini 共 {len(gemini_keys)} 組")
-    status_placeholder.info("⏳ **AI 處理狀態：Gemini 專家正在進行四系統命理、MBTI 心理學與自定義關注點的交叉深度推理，請稍候……**")
+    # 1. 檢核防呆：若預設內容完全未修改（預設生辰 2000-01-01 00:00 且無填寫國家與自定義），給予提示
+    is_default_params = (input_date == date(2000, 1, 1) and input_time == time(0, 0) and not input_location.strip() and not input_mbti.strip() and not input_focus_custom.strip())
     
-    full_chart_summary = {
-        "生辰與地理參數": {"公曆": birth_dt.strftime("%Y-%m-%d %H:%M"), "農曆": lunar_str, "性別": input_gender, "出生地點": input_location if input_location else "未指定", "MBTI人格類型": input_mbti if input_mbti else "未填寫", "特別關注點 (使用者自定義)": input_focus_custom if input_focus_custom else "無特別指定", "計算年齡": f"約 {calculated_age} 歲", "生命階段與分析重心": life_stage_desc},
-        "東方排盤": {"八字": bazi, "紫微完整十二宮": ziwei},
-        "西洋占星": astrology,
-        "人類圖印記": human_design
-    }
-    
-    custom_focus_instruction = f"""
+    if is_default_params:
+        status_placeholder.warning("⚠️ **請先修改或填寫您的生辰與出生地點等個人參數，才能進行 AI 專家深度詳算！**")
+    else:
+        # 2. 觸發 30 秒廣告彈窗模擬體驗
+        with st.status("📢 **贊助商廣告播放中 (30秒倒數)...**", expanded=True) as ad_status:
+            st.write("感謝您支持本免費命理系統，AI 運算資源由贊助商維護...")
+            ad_bar = st.progress(0)
+            for sec in range(30):
+                py_time.sleep(1)
+                ad_bar.progress((sec + 1) / 30)
+            ad_status.update(label="✅ **廣告播放完畢，正在啟動 AI 專家交叉推理……**", state="complete", expanded=False)
+
+        status_placeholder.info("⏳ **AI 處理狀態：Gemini 專家正在進行四系統命理、MBTI 心理學與自定義關注點的交叉深度推理，請稍候……**")
+        
+        full_chart_summary = {
+            "生辰與地理參數": {"公曆": birth_dt.strftime("%Y-%m-%d %H:%M"), "農曆": lunar_str, "性別": input_gender, "出生地點": input_location if input_location else "未指定", "MBTI人格類型": input_mbti if input_mbti else "未填寫", "特別關注點 (使用者自定義)": input_focus_custom if input_focus_custom else "無特別指定", "使用者意見回饋": input_feedback if input_feedback else "無", "計算年齡": f"約 {calculated_age} 歲", "生命階段與分析重心": life_stage_desc},
+            "東方排盤": {"八字": bazi, "紫微完整十二宮": ziwei},
+            "西洋占星": astrology,
+            "人類圖印記": human_design
+        }
+        
+        custom_focus_instruction = f"""
 【特別關注導向（使用者自定義）】
 當事人特別希望在報告中深入探討以下方向或困惑：**「{input_focus_custom}」**。
 請務必在「命盤總論」、「四系統與心理交叉」以及「六大人生領域」中，將此特別關注點作為核心主軸之一進行深刻剖析，給出具體、可落地的現實解法與心理調適建議。
 """ if input_focus_custom.strip() else ""
 
-    mbti_instruction = f"當事人的 MBTI 心理類型為：**{input_mbti}**。" if input_mbti.strip() else "當事人未填寫 MBTI，請依據命盤本身的心理特質進行推導。"
+        mbti_instruction = f"當事人的 MBTI 心理類型為：**{input_mbti}**。" if input_mbti.strip() else "當事人未填寫 MBTI，請依據命盤本身的心理特質進行推導。"
 
-    prompt = f"""
-你是一位專業、客觀且具備深厚洞察力的資深戰略顧問與人生教練。請嚴格根據我提供的命理排盤資料（八字、紫微斗數全十二宮、西洋占星、人類圖）以及當事人的相關心理與自定義特質，使用「四系統交叉分析」的方式來全面解讀全盤綜合解析報告。
+        prompt = f"""
+你是一位專業, 客觀且具備深厚洞察力的資深戰略顧問與人生教練。請嚴格根據我提供的命理排盤資料（八字、紫微斗數全十二宮、西洋占星、人類圖）以及當事人的相關心理與自定義特質，使用「四系統交叉分析」的方式來全面解讀全盤綜合解析報告。
 
 {mbti_instruction}
 {custom_focus_instruction}
@@ -485,11 +533,15 @@ if exec_btn:
 
 請以 Markdown 格式輸出結構清晰、論述深刻的四系統交叉分析報告：
 """
-    gemini_res = call_gemini_api(prompt, gemini_keys)
-    status_placeholder.success("✅ **AI 處理狀態：報告生成完畢！**")
-    
-    st.session_state.gemini_report = gemini_res
-    st.session_state.export_text = f"""# 命理詳算系統報告
+        gemini_res = call_gemini_api(prompt, gemini_keys)
+        
+        # 更新最後執行時間戳記以啟動 180 秒冷卻
+        st.session_state.last_exec_time = py_time.time()
+        
+        status_placeholder.success("✅ **AI 處理狀態：報告生成完畢！**")
+        
+        st.session_state.gemini_report = gemini_res
+        st.session_state.export_text = f"""# 命理詳算系統報告
 生成時間：{datetime.now().strftime("%Y-%m-%d %H:%M")}
 命盤生辰設定：{birth_dt.strftime("%Y-%m-%d %H:%M")} ({lunar_str})
 出生地點：{input_location if input_location else "未指定"}
@@ -497,6 +549,7 @@ if exec_btn:
 計算年齡：約 {calculated_age} 歲 ({life_stage_desc})
 MBTI 類型：{input_mbti if input_mbti else "未填寫"}
 特別關注：{input_focus_custom if input_focus_custom else "無特別指定"}
+使用者回饋：{input_feedback if input_feedback else "無"}
 
 ==================================================
 【原始排盤與心理結構化數據】
@@ -506,7 +559,7 @@ MBTI 類型：{input_mbti if input_mbti else "未填寫"}
 【GEMINI 專家深度專家詳解報告】
 {gemini_res}
 """
-    st.rerun()
+        st.rerun()
 
 if st.session_state.gemini_report:
     st.markdown("### 📜 Gemini 專家四系統交叉深度詳算報告")
