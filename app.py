@@ -34,12 +34,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def load_keys_from_file(filename):
+def load_keys_from_file(filename="api_key.txt"):
+    # 1. 優先讀取雲端 Streamlit Secrets 裡的多組金鑰
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            secret_key = st.secrets["GEMINI_API_KEY"]
+            if secret_key:
+                keys = [k.strip() for k in secret_key.split(",") if k.strip()]
+                if keys:
+                    return keys
+    except Exception:
+        pass
+
+    # 2. 如果沒有雲端 Secrets（例如在本機執行），則讀取本地的 api_key.txt
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [os.path.join(base_dir, filename), os.path.join(base_dir, filename.lower()), os.path.join(base_dir, filename + ".txt"), filename]
     target_path = next((p for p in candidates if os.path.exists(p) and os.path.isfile(p)), None)
     if not target_path:
         return []
+    
     valid_keys = []
     with open(target_path, "r", encoding="utf-8-sig", errors="ignore") as f:
         for line in f:
@@ -88,7 +101,7 @@ def _worker_fetch_gemini(key, key_masked, prompt_text):
 
 def call_gemini_api(prompt_text, keys):
     if not keys:
-        return "【未配置 Gemini Key】請確認同目錄下存在 `api_key.txt` 並填入有效金鑰。"
+        return "【未配置 Gemini Key】請確認已在本機設定 api_key.txt 或在雲端後台設定 Secrets。"
     unique_keys = list(set(keys))
     with ThreadPoolExecutor(max_workers=min(len(unique_keys), 8)) as executor:
         futures = {executor.submit(_worker_fetch_gemini, k, k[:6] + "...", prompt_text): k for k in unique_keys}
@@ -455,7 +468,7 @@ if exec_btn:
 
 【分析架構與規範嚴格要求】
 1. **【命盤與心理總論】**：先從八字、紫微、西洋占星、人類圖以及心理模型各自抓出核心人格、天賦、弱點與人生主題。
-2. **【四系統交叉比對】**：比較命理系統是否反覆指向相同特質。重點找：共同天賦、共同矛盾、共同風險、不同系統之間的差異。最後整合成一個／核心人格／命格與心理定位」（請以條列式說明，絕對不准用任何 ASCII 樹狀線條圖）。
+2. **【四系統交叉比對】**：比較命理系統是否反覆指向相同特質。重點找：共同天賦、共同矛盾、共同風險、不同系統之間的差異。最後整合成一個「核心人格／命格與心理定位」（請以條列式說明，絕對不准用任何 ASCII 樹狀線條圖）。
 3. **【六大人生領域】**：依序分析：事業、財富、感情／婚姻、健康／能量、家庭／人際、接下來五年的人生趨勢（含今年 2026 沒過完的至 2030 年，並嚴格對應上述的「生命階段分析重心」，其中家庭部分涵蓋父母、長輩與手足）。每一個領域都必須採用：「八字/命理 → 心理機制 → 四系統交叉結論 → 實際策略」的結構。
 4. **【命理與心理翻譯成現實】**：不要只講術語。每個重要訊號都要轉換成：「特徵／機制 → 人格傾向 → 現實優勢 → 潛在風險 → 實際做法」。
 5. **【時間軸】**：針對接下來五年（2026–2030）的人生趨勢，由於缺少大運與流年細節，切勿假裝精準預測每年事件，改以「階段性五年戰略藍圖」來規劃。
