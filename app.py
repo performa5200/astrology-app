@@ -1175,6 +1175,7 @@ if st.session_state.last_params != current_params:
     st.session_state.export_text = None
     st.session_state.last_params = current_params
 
+input_time = time(input_hour, input_minute)
 birth_dt = datetime.combine(input_date, input_time)
 bazi, ziwei, lunar_str = calculate_real_oriental(birth_dt)
 astrology = get_astrology_data(birth_dt, input_location)
