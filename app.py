@@ -83,15 +83,21 @@ def load_gemini_keys(filename="api_key.txt"):
 
 
 def get_openai_key():
+    """支援 OPENAI_API_KEY，也相容舊版 Secrets 的 OPENAI_KEY。"""
     try:
-        return str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+        key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+        if key:
+            return key
+        return str(st.secrets.get("OPENAI_KEY", "")).strip()
     except Exception:
         return ""
 
 
 def get_openai_model():
+    """預設使用目前官方的低成本 GPT-5.6 Luna。"""
     try:
-        return str(st.secrets.get("OPENAI_MODEL", "gpt-5.6-luna")).strip() or "gpt-5.6-luna"
+        model = str(st.secrets.get("OPENAI_MODEL", "")).strip()
+        return model or "gpt-5.6-luna"
     except Exception:
         return "gpt-5.6-luna"
 
@@ -203,43 +209,95 @@ def _extract_openai_text(data):
 
 
 def call_openai_api(prompt_text):
+    """
+    OpenAI Responses API。
+    以 GPT-5.6 Luna + low reasoning 控制成本。
+    若 Secrets 中 OPENAI_MODEL 設定錯誤，會自動再用 Luna 重試一次。
+    """
     api_key = get_openai_key()
-    model_name = get_openai_model()
+    configured_model = get_openai_model()
 
     if not api_key:
-        return "### ❌ OpenAI 未配置\n請確認 Streamlit Secrets 已設定 `OPENAI_API_KEY`。"
+        return (
+            "### ❌ OpenAI 未配置\n"
+            "請確認 Streamlit Secrets 至少設定：`OPENAI_API_KEY = \"你的金鑰\"`"
+        )
 
     url = "https://api.openai.com/v1/responses"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    payload = {
-        "model": model_name,
-        "input": prompt_text,
-        "max_output_tokens": 7000,
-    }
+
+    def request_model(model_name):
+        payload = {
+            "model": model_name,
+            "input": prompt_text,
+            "max_output_tokens": 5000,
+            "reasoning": {
+                "effort": "low"
+            },
+        }
+        return requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=180,
+        )
+
+    models_to_try = [configured_model]
+    if configured_model != "gpt-5.6-luna":
+        models_to_try.append("gpt-5.6-luna")
+
+    errors = []
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        for model_name in models_to_try:
+            response = request_model(model_name)
 
-        if response.status_code != 200:
-            return (
-                f"### ❌ OpenAI 呼叫失敗\n"
-                f"HTTP {response.status_code}\n\n"
-                f"```text\n{response.text[:1200]}\n```"
-            )
+            if response.status_code == 200:
+                data = response.json()
+                output_text = _extract_openai_text(data)
 
-        data = response.json()
-        text = _extract_openai_text(data)
+                if output_text:
+                    return output_text
 
-        if text:
-            return text
+                return (
+                    "### ❌ OpenAI 回傳成功，但沒有取得文字內容。\n"
+                    f"模型：`{model_name}`"
+                )
 
-        return "### ❌ OpenAI 回傳成功，但沒有取得文字內容。"
+            # 收集安全的 API 錯誤資訊，方便在 Streamlit 直接診斷。
+            try:
+                err_data = response.json()
+                err = err_data.get("error", {})
+                message = err.get("message") or response.text[:800]
+                err_type = err.get("type", "")
+                err_code = err.get("code", "")
+                errors.append(
+                    f"模型 `{model_name}`｜HTTP {response.status_code}"
+                    f"｜type={err_type or '未知'}"
+                    f"｜code={err_code or '未知'}"
+                    f"｜{message}"
+                )
+            except Exception:
+                errors.append(
+                    f"模型 `{model_name}`｜HTTP {response.status_code}"
+                    f"｜{response.text[:800]}"
+                )
 
+        return (
+            "### ❌ OpenAI 分析失敗\n"
+            "請查看下方錯誤原因：\n\n"
+            + "\n\n".join(f"- {e}" for e in errors)
+        )
+
+    except requests.exceptions.Timeout:
+        return "### ❌ OpenAI 連線逾時\n請稍後再試。"
+    except requests.exceptions.RequestException as exc:
+        return f"### ❌ OpenAI 網路連線失敗\n`{exc}`"
     except Exception as exc:
-        return f"### ❌ OpenAI 連線失敗\n`{exc}`"
+        return f"### ❌ OpenAI 程式錯誤\n`{exc}`"
 
 
 # ============================================================
@@ -1464,7 +1522,7 @@ if exec_btn:
             if gemini_res.startswith("### ❌"):
                 raise RuntimeError("Gemini 分析失敗，無法進入第二階段交叉分析。")
 
-            progress.write("🟣 OpenAI：讀取精簡 Gemini 研究摘要，進行第二輪交叉辯論")
+            progress.write("🟣 OpenAI：讀取精簡 Gemini 摘要，進行低成本交叉辯論")
             progress.write("⚖️ 雙 AI：交叉辯論、觀點檢驗與心理語言轉譯")
 
             openai_prompt = build_openai_prompt(
@@ -1477,7 +1535,9 @@ if exec_btn:
             openai_res = call_openai_api(openai_prompt)
 
             if openai_res.startswith("### ❌"):
-                raise RuntimeError("OpenAI 分析失敗。")
+                # 保留 API 實際錯誤，讓站長可以直接知道是金鑰、模型、
+                # 額度或請求參數問題，而不是只看到「OpenAI 分析失敗」。
+                raise RuntimeError(openai_res)
 
             progress.write("📝 報告產出中")
 
