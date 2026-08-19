@@ -858,6 +858,7 @@ def build_gemini_prompt(full_chart_summary, calculated_age, life_stage_desc):
 - 使用短句與條列。
 - 保留命理原始依據，讓第二位 AI 可以追溯判斷。
 - 不要產生給使用者看的完整報告。
+- 不要自行補造不存在的宮位、星曜、四柱或占星位置。
 
 【原始結構化資料】
 {json.dumps(full_chart_summary, ensure_ascii=False, indent=2)}
@@ -866,12 +867,13 @@ def build_gemini_prompt(full_chart_summary, calculated_age, life_stage_desc):
 
 def build_openai_prompt(full_chart_summary, calculated_age, life_stage_desc, gemini_report):
     focus = full_chart_summary.get("使用者本次最想了解", "未特別指定")
+    eastern = full_chart_summary.get("東方排盤", {})
     compact_summary = {
-        "出生資料": full_chart_summary.get("出生資料"),
-        "八字": full_chart_summary.get("八字"),
-        "紫微": full_chart_summary.get("紫微"),
-        "西洋占星": full_chart_summary.get("西洋占星"),
-        "人類圖": full_chart_summary.get("人類圖"),
+        "生辰與地理參數": full_chart_summary.get("生辰與地理參數", {}),
+        "八字": eastern.get("八字", {}),
+        "紫微十二宮": eastern.get("紫微十二宮（簡化引擎）", {}),
+        "西洋占星": full_chart_summary.get("西洋占星", {}),
+        "人類圖": full_chart_summary.get("人類圖", {}),
         "MBTI": full_chart_summary.get("MBTI"),
         "使用者本次最想了解": focus,
     }
@@ -893,7 +895,11 @@ Gemini 不是你的下屬，你也不是 Gemini 的裁判。
 【使用者本次最想了解】
 {focus}
 
-【必要原始資料】
+【OpenAI 必須獨立檢驗的完整命盤資料】
+以下資料是 Python 命理資料引擎實際計算出的原始結構。
+OpenAI 必須先獨立閱讀並理解這些資料，再與 Gemini 摘要逐項比對。
+不得只接受 Gemini 的二手結論。
+
 {json.dumps(compact_summary, ensure_ascii=False, indent=2)}
 
 【Gemini 結構化研究摘要】
@@ -910,7 +916,19 @@ Gemini 不是你的下屬，你也不是 Gemini 的裁判。
 - 判斷：高度共識／部分共識／有條件分歧／明顯分歧／尚待驗證
 - 整合結論：
 
-OpenAI 必須重新閱讀必要原始資料，不可只接受 Gemini 摘要。
+OpenAI 必須重新閱讀完整原始命盤資料，不可只接受 Gemini 摘要。
+如果 Gemini 的結論與原始排盤資料不一致，以原始排盤資料為優先，並在交叉辯論中修正。
+八字、紫微、占星、人類圖的具體欄位均已在上方提供；請實際引用其中可確認的結構進行比對。
+
+【使用者閱讀體驗】
+這是一份直接給使用者閱讀的最終報告。不要揭露後台資料傳遞、Prompt、API、token、資料管線或「沒有收到哪些資料」等技術細節。
+不要寫「目前原始資料中沒有……」「我們沒有……」「本報告無法……」這類掀底式說明。
+應直接使用已提供的命盤資料進行分析；若某項資料確實不足，只需自然地說「此處不作過度推論」或「此訊號僅作參考」，不要解釋後台原因。
+
+【第一人稱規則】
+最終報告不要使用「我認為」「我會」「我判斷」「我們認為」等 AI 第一人稱。
+涉及 AI 的觀點時，統一使用「OpenAI 判斷」「OpenAI 認為」「OpenAI 與 Gemini 的交叉判斷」等第三人稱表述。
+使用者本人則可使用「你」「使用者」。
 
 【最終報告】
 完成交叉辯論後，直接輸出完整、清楚、詳細但不冗長的「知命見己」最終報告。
@@ -1334,37 +1352,6 @@ pure_chart_data += f"""
 已定義中心：{', '.join(human_design['已定義中心'])}
 """
 
-col_btn1, col_btn2 = st.columns(2)
-
-with col_btn1:
-    st.download_button(
-        "💾 下載純命盤",
-        data=pure_chart_data,
-        file_name=f"四系統純命盤_{birth_dt.strftime('%Y%m%d')}.txt",
-        mime="text/plain",
-        use_container_width=True,
-    )
-
-with col_btn2:
-    report_ready = (
-        st.session_state.gemini_report is not None
-        or st.session_state.openai_report is not None
-    )
-    if report_ready:
-        st.download_button(
-            "📂 下載雙 AI 完整解析報告",
-            data=st.session_state.export_text or "",
-            file_name=f"知命見己_雙AI詳算報告_{birth_dt.strftime('%Y%m%d')}.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    else:
-        st.button(
-            "📂 下載雙 AI 完整解析報告",
-            disabled=True,
-            use_container_width=True
-        )
-
 st.divider()
 st.markdown("### 📊 命盤資料")
 
@@ -1504,10 +1491,10 @@ if exec_btn:
             "人類圖": human_design,
         }
 
-        progress = st.status("AI 正在準備分析……", expanded=True)
+        progress = st.status("🔑 調用金鑰、準備 AI 交叉分析……", expanded=True)
 
         try:
-            progress.write("🔑 讀取 Gemini / OpenAI 金鑰")
+            progress.write("🔑 調用 Gemini / OpenAI 金鑰")
             progress.write("🧠 取得 Gemini 可用模型")
 
             gemini_prompt = build_gemini_prompt(
@@ -1516,13 +1503,13 @@ if exec_btn:
                 life_stage_desc,
             )
 
-            progress.write("🟢 Gemini：命理結構分析中")
+            progress.write("🟢 Gemini：第一階段命理結構分析中")
             gemini_res = call_gemini_api(gemini_prompt, gemini_keys)
 
             if gemini_res.startswith("### ❌"):
                 raise RuntimeError("Gemini 分析失敗，無法進入第二階段交叉分析。")
 
-            progress.write("🟣 OpenAI：讀取精簡 Gemini 摘要，進行低成本交叉辯論")
+            progress.write("🟣 OpenAI：讀取完整命盤資料＋Gemini 摘要，進行第二階段交叉辯論")
             progress.write("⚖️ 雙 AI：交叉辯論、觀點檢驗與心理語言轉譯")
 
             openai_prompt = build_openai_prompt(
@@ -1533,6 +1520,20 @@ if exec_btn:
             )
 
             openai_res = call_openai_api(openai_prompt)
+
+            # 統一最終報告中的 AI 第一人稱，避免出現「我認為／我建議」等措辭。
+            # 僅處理明確屬於 AI 判斷的常見句型，不處理「我的人生／我的工作」等使用者語境。
+            ai_first_person_replacements = {
+                "我認為": "OpenAI認為",
+                "我判斷": "OpenAI判斷",
+                "我建議": "OpenAI建議",
+                "我會建議": "OpenAI會建議",
+                "我會認為": "OpenAI會認為",
+                "我們認為": "OpenAI與Gemini共同判斷",
+                "我們判斷": "OpenAI與Gemini共同判斷",
+            }
+            for old_phrase, new_phrase in ai_first_person_replacements.items():
+                openai_res = openai_res.replace(old_phrase, new_phrase)
 
             if openai_res.startswith("### ❌"):
                 # 保留 API 實際錯誤，讓站長可以直接知道是金鑰、模型、
@@ -1611,7 +1612,27 @@ if st.session_state.gemini_report or st.session_state.openai_report:
 
 本報告提供的是一組理解自己、整理問題與思考人生方向的參考框架，而不是唯一答案。
 
-如果你希望從不同角度繼續探索，可以將本報告輸出後，提供給其他 AI 工具，針對其中的特定議題進一步提問，取得不同觀點，再自行比較與判斷。
+如果希望從不同角度繼續探索，可以將本報告輸出後，提供給其他 AI 工具，針對其中的特定議題進一步提問，取得不同觀點，再自行比較與判斷。
 
 **真正重要的，不是找到唯一答案，而是透過不同觀點，更清楚地看見自己。**
 """)
+
+    # 報告完成後才顯示下載區，避免使用者在閱讀前就看到操作按鈕。
+    st.markdown("### 📥 下載")
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button(
+            "💾 下載純命盤",
+            data=pure_chart_data,
+            file_name=f"四系統純命盤_{birth_dt.strftime('%Y%m%d')}.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+    with d2:
+        st.download_button(
+            "📂 下載雙 AI 完整解析報告",
+            data=st.session_state.export_text or "",
+            file_name=f"知命見己_雙AI詳算報告_{birth_dt.strftime('%Y%m%d')}.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
