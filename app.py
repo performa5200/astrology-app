@@ -4,14 +4,18 @@ import os
 import re
 import math
 import requests
-import smtplib
 import time as py_time
-from email.mime.text import MIMEText
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, time, timedelta
 from lunar_python import Solar, Lunar
 
 st.set_page_config(page_title="命理全景解析", layout="wide")
+
+# Streamlit Secrets 需要設定：
+# GEMINI_API_KEY = "Gemini_API_Key_1,Gemini_API_Key_2,..."
+# OPENAI_API_KEY = "你的 OpenAI API Key"
+#
+# 注意：真正的 API Key 不要寫進 GitHub 的 app.py。
 
 # 在網頁標頭中注入 Google AdSense 中繼標籤與正式追蹤碼
 st.markdown("""
@@ -69,21 +73,6 @@ def load_keys_from_file(filename="api_key.txt"):
                 valid_keys.append(clean)
     return valid_keys
 
-def send_feedback_email(feedback_text):
-    try:
-        sender = st.secrets.get("EMAIL_USER", "performa5200@gmail.com")
-        password = st.secrets.get("EMAIL_PASS", "")
-        if not password:
-            return
-        msg = MIMEText(f"收到新使用者意見回饋：\n\n{feedback_text}", "plain", "utf-8")
-        msg["Subject"] = "命理系統使用者意見回饋"
-        msg["From"] = sender
-        msg["To"] = "performa5200@gmail.com"
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(sender, password)
-            server.sendmail(sender, ["performa5200@gmail.com"], msg.as_string())
-    except Exception as e:
-        print(f"郵件發送失敗: {e}")
 
 # ----------------- 1. Gemini 調用模組 (含動態狀態反饋) -----------------
 def _get_gemini_models_dynamic(key):
@@ -99,18 +88,20 @@ def _get_gemini_models_dynamic(key):
         pass
     return ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 
-def call_gemini_api_dynamic(prompt_text, keys, status_box):
+def call_gemini_api_dynamic(prompt_text, keys, status_box=None):
     if not keys:
         return "【未配置 Gemini Key】請確認已在本機設定 api_key.txt 或在雲端後台設定 Secrets。"
     
     unique_keys = list(set(keys))
     for i, k in enumerate(unique_keys):
-        status_box.info(f"⏳ **AI 處理狀態：正在調用第 {i+1} 組金鑰中，請稍候...**")
+        if status_box is not None:
+            status_box.info(f"⏳ **AI 處理狀態：正在調用第 {i+1} 組金鑰中，請稍候...**")
         active_models = _get_gemini_models_dynamic(k)
         clean_k = str(key).strip().strip("[]'\"") if (key := k) else ""
         
         for model_name in active_models:
-            status_box.info(f"⏳ **AI 處理狀態：嘗試使用模型 [{model_name}] 進行推理...**")
+            if status_box is not None:
+                status_box.info(f"⏳ **AI 處理狀態：嘗試使用模型 [{model_name}] 進行推理...**")
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_k}"
             payload = {"contents": [{"parts": [{"text": prompt_text}]}], "generationConfig": {"temperature": 0.4, "topP": 0.9, "maxOutputTokens": 8192}}
             try:
@@ -121,11 +112,77 @@ def call_gemini_api_dynamic(prompt_text, keys, status_box):
                     if full_text.strip():
                         return full_text
                 else:
-                    status_box.warning(f"⚠️ **金鑰額度異常或超限 (狀態碼 {response.status_code})，已超過金鑰上限，正在切換中...**")
+                    if status_box is not None:
+                        status_box.warning(f"⚠️ **金鑰額度異常或超限 (狀態碼 {response.status_code})，正在切換金鑰...**")
             except Exception:
-                status_box.warning("⚠️ **連線逾時或發生例外，正在更換金鑰中...**")
+                if status_box is not None:
+                    status_box.warning("⚠️ **連線逾時或發生例外，正在更換金鑰中...**")
     
     return "### ❌ 所有 Gemini 金鑰均呼叫失敗或額度已滿，請更換有效 API Key。"
+
+
+
+def load_openai_key():
+    """從 Streamlit Secrets 讀取 OpenAI API Key；本機也可使用環境變數。"""
+    try:
+        key = st.secrets.get("OPENAI_API_KEY", "")
+        if key:
+            return str(key).strip()
+    except Exception:
+        pass
+    return os.environ.get("OPENAI_API_KEY", "").strip()
+
+
+def call_openai_api(prompt_text):
+    """使用 OpenAI Responses API 進行獨立分析。"""
+    api_key = load_openai_key()
+    if not api_key:
+        return "### ❌ 未配置 OpenAI API Key\n請在 Streamlit Secrets 設定 `OPENAI_API_KEY`。"
+
+    model_name = "gpt-5.6-luna"
+    url = "https://api.openai.com/v1/responses"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload = {
+        "model": model_name,
+        "input": prompt_text,
+        "max_output_tokens": 8192,
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=90)
+
+        if response.status_code != 200:
+            try:
+                err = response.json()
+                err_msg = err.get("error", {}).get("message", response.text)
+            except Exception:
+                err_msg = response.text
+            return f"### ❌ OpenAI 呼叫失敗\n狀態碼：`{response.status_code}`\n\n{err_msg}"
+
+        data = response.json()
+
+        if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+            return data["output_text"].strip()
+
+        texts = []
+        for item in data.get("output", []):
+            for content in item.get("content", []):
+                if content.get("type") == "output_text" and content.get("text"):
+                    texts.append(content["text"])
+
+        full_text = "\n".join(texts).strip()
+        if full_text:
+            return full_text
+
+        return "### ❌ OpenAI 未返回可讀取的分析內容"
+
+    except requests.exceptions.Timeout:
+        return "### ❌ OpenAI 連線逾時\n請稍後重新執行。"
+    except Exception as e:
+        return f"### ❌ OpenAI 呼叫發生例外\n{e}"
 
 # ----------------- 2. 曆法與星曆計算核心 -----------------
 PALACES_NAMES = ["命宮", "兄弟宮", "夫妻宮", "子女宮", "財帛宮", "疾厄宮", "遷移宮", "交友宮", "官祿宮", "田宅宮", "福德宮", "父母宮"]
@@ -251,6 +308,8 @@ def calculate_real_human_design(dt, city_str):
 # 初始化持久化狀態
 if "gemini_report" not in st.session_state:
     st.session_state.gemini_report = None
+if "openai_report" not in st.session_state:
+    st.session_state.openai_report = None
 if "export_text" not in st.session_state:
     st.session_state.export_text = None
 if "last_params" not in st.session_state:
@@ -258,8 +317,9 @@ if "last_params" not in st.session_state:
 if "last_exec_time" not in st.session_state:
     st.session_state.last_exec_time = 0.0
 
-# 建立 24 小時每 10 分鐘下拉選單選項 (共 144 個時間點)
-time_options = [f"{h:02d}:{m:02d}" for h in range(24) for m in range(0, 60, 10)]
+# 出生時間拆成「時」與「分」兩個下拉選單，方便單獨調整
+hour_options = list(range(24))
+minute_options = list(range(60))
 
 # UI 介面
 st.title("🌌 命理全景解析")
@@ -273,19 +333,38 @@ with st.container():
     with c2:
         input_date = st.date_input("出生公曆日期", value=date(2000, 1, 1), min_value=date(1900, 1, 1), max_value=date(2100, 12, 31), key="f_dt")
     with c3:
-        # 下拉選單選擇出生時間
-        selected_time_str = st.selectbox("出生時間 (24h 下拉選擇)", time_options, index=0, key="f_time_select")
-        sel_h, sel_m = map(int, selected_time_str.split(":"))
-        input_time = time(sel_h, sel_m)
+        time_c1, time_c2 = st.columns(2)
+        with time_c1:
+            selected_hour = st.selectbox(
+                "出生時",
+                hour_options,
+                index=0,
+                format_func=lambda x: f"{x:02d} 時",
+                key="f_hour_select",
+            )
+        with time_c2:
+            selected_minute = st.selectbox(
+                "出生分",
+                minute_options,
+                index=0,
+                format_func=lambda x: f"{x:02d} 分",
+                key="f_minute_select",
+            )
+        input_time = time(selected_hour, selected_minute)
 
     gc1, gc2 = st.columns([1.5, 1])
     with gc1:
-        input_location = st.text_input("出生國家 / 城市 (可中英文自由輸入，自動校正上升星座)", value="", key="f_loc")
+        input_location = st.text_input(
+            "出生國家 / 城市 (可中英文自由輸入，自動校正上升星座)",
+            value="",
+            key="f_loc",
+        )
     with gc2:
-        input_mbti = st.text_input("MBTI 人格類型 (選填，供交叉比對)", value="", key="f_mbti")
-
-    input_focus_custom = st.text_input("💡 我想多了解哪部分（自由填寫，例如：想了解人際溝通盲點、特定專案瓶頸、或心態調整）", value="", key="f_focus")
-    input_feedback = st.text_area("💬 意見回饋 (選填，歡迎留下您的寶貴建議或使用心得)", value="", height=70, key="f_feed")
+        input_mbti = st.text_input(
+            "MBTI 人格類型 (選填，供交叉比對)",
+            value="",
+            key="f_mbti",
+        )
 
     # 計算 10 秒冷卻倒數與自動解鎖機制
     cooldown_total = 10
@@ -311,7 +390,8 @@ status_placeholder = st.empty()
 # 備註說明區塊
 st.markdown("""
 💡 **操作備註：**
-1. 「命理詳算報告.txt」可自行上傳至其他 AI 介面，獲取不同的解析方向。
+1. 本版本會同時交由 Gemini 與 OpenAI 各自獨立分析，兩份報告不互相影響。
+2. 「命理詳算報告.txt」可自行上傳至其他 AI 介面，獲取不同的解析方向。
 """)
 
 # 計算當事人至 2026 年的實際年齡與生命階段
@@ -325,9 +405,10 @@ else:
     life_stage_desc = f"青壯年與事業衝刺期（約 {calculated_age} 歲，黃金發展期：分析重心聚焦於事業定位、知識資產化、財富槓桿與精力邊界管理）"
 
 # 當參數變動時，自動清除舊報告避免殘留
-current_params = f"{input_gender}_{input_date}_{input_time}_{input_location}_{input_mbti}_{input_focus_custom}"
+current_params = f"{input_gender}_{input_date}_{input_time}_{input_location}_{input_mbti}"
 if st.session_state.last_params != current_params:
     st.session_state.gemini_report = None
+    st.session_state.openai_report = None
     st.session_state.export_text = None
     st.session_state.last_params = current_params
 
@@ -344,8 +425,6 @@ pure_chart_data = f"""# 四系統純命盤結構數據 (含 MBTI 整合)
 性別設定：{input_gender}
 計算年齡：約 {calculated_age} 歲 ({life_stage_desc})
 MBTI 類型：{input_mbti if input_mbti else "未填寫"}
-特別關注：{input_focus_custom if input_focus_custom else "無特別指定"}
-使用者回饋：{input_feedback if input_feedback else "無"}
 
 ==================================================
 1. 【八字系統 (子平四柱)】
@@ -391,7 +470,10 @@ with col_btn2:
         use_container_width=True
     )
 with col_btn3:
-    report_ready = st.session_state.gemini_report is not None
+    report_ready = (
+        st.session_state.gemini_report is not None
+        or st.session_state.openai_report is not None
+    )
     if report_ready:
         st.download_button(
             label="📂 輸出完整解析報告 (含AI解析)",
@@ -471,97 +553,204 @@ st.divider()
 gemini_keys = load_keys_from_file("api_key.txt")
 
 if exec_btn:
-    is_default_params = (input_date == date(2000, 1, 1) and selected_time_str == "00:00" and not input_location.strip() and not input_mbti.strip() and not input_focus_custom.strip())
+    is_default_params = (
+        input_date == date(2000, 1, 1)
+        and selected_hour == 0
+        and selected_minute == 0
+        and not input_location.strip()
+        and not input_mbti.strip()
+    )
     
     if is_default_params:
         status_placeholder.warning("⚠️ **請先修改或填寫您的生辰與出生地點等個人參數，才能進行 AI 專家深度詳算！**")
     else:
-        # 若有填寫意見回饋，自動主動寄信至指定信箱
-        if input_feedback.strip():
-            send_feedback_email(input_feedback)
-
         full_chart_summary = {
-            "生辰與地理參數": {"公曆": birth_dt.strftime("%Y-%m-%d %H:%M"), "農曆": lunar_str, "性別": input_gender, "出生地點": input_location if input_location else "未指定", "MBTI人格類型": input_mbti if input_mbti else "未填寫", "特別關注點 (使用者自定義)": input_focus_custom if input_focus_custom else "無特別指定", "使用者意見回饋": input_feedback if input_feedback else "無", "計算年齡": f"約 {calculated_age} 歲", "生命階段與分析重心": life_stage_desc},
+            "生辰與地理參數": {"公曆": birth_dt.strftime("%Y-%m-%d %H:%M"), "農曆": lunar_str, "性別": input_gender, "出生地點": input_location if input_location else "未指定", "MBTI人格類型": input_mbti if input_mbti else "未填寫", "計算年齡": f"約 {calculated_age} 歲", "生命階段與分析重心": life_stage_desc},
             "東方排盤": {"八字": bazi, "紫微完整十二宮": ziwei},
             "西洋占星": astrology,
             "人類圖印記": human_design
         }
         
-        custom_focus_instruction = f"""
-【特別關注導向（使用者自定義）】
-當事人特別希望在報告中深入探討以下方向或困惑：**「{input_focus_custom}」**。
-請務必在「命盤總論」、「四系統與心理交叉」以及「六大人生領域」中，將此特別關注點作為核心主軸之一進行深刻剖析，給出具體、可落地的現實解法與心理調適建議。
-""" if input_focus_custom.strip() else ""
-
-        mbti_instruction = f"當事人的 MBTI 心理類型為：**{input_mbti}**。" if input_mbti.strip() else "當事人未填寫 MBTI，請依據命盤本身的心理特質進行推導。"
+        mbti_instruction = (
+            f"當事人的 MBTI 心理類型為：**{input_mbti}**。"
+            if input_mbti.strip()
+            else "當事人未填寫 MBTI，請只依據提供的四系統命盤資料進行心理特質推導，並清楚標示這屬於模型推論。"
+        )
 
         prompt = f"""
-你是一位專業、客觀且具備深厚洞察力的資深戰略顧問與人生教練。請嚴格根據我提供的命理排盤資料（八字、紫微斗數全十二宮、西洋占星、人類圖）以及當事人的相關心理與自定義特質，使用「四系統交叉分析」的方式來全面解讀全盤綜合解析報告。
+你是一位專業、客觀且具備深厚洞察力的資深戰略顧問與人生教練。
+這是一份「四系統命理 × 心理模型」的深度分析任務。
+
+【重要：獨立分析】
+你現在是獨立工作的 AI 分析師。
+不要假設另一個 AI 會得出什麼結論，也不要刻意迎合常見命理解讀。
+請從你自己的推理角度找出資料中的「主要訊號、矛盾訊號、弱訊號與不確定性」。
+如果不同系統互相矛盾，請明確指出，而不是硬湊成一致答案。
+命理不是科學事實，請將其定位為人格理解與決策參考模型。
 
 {mbti_instruction}
-{custom_focus_instruction}
 
-【非常重要：動態生命階段適配】
-當事人的生辰計算出其目前大約為 **{calculated_age} 歲**（出生於：{input_location if input_location else "未指定"}），其生命階段屬於：**{life_stage_desc}**。
-請務必根據此生命階段動態調整報告內在領域的分析重心：
-- 若屬於「學習階段」：請大幅降低事業與財富擴張分析，轉而深度解析學業發展、知識吸收、身心健康、同儕人際以及**整個家庭（父母、長輩與手足）帶來的心理支持與影響**。
-- 若屬於「退休與養老階段」：請淡化傳統職場事業衝刺，轉而著重於身心健康管理、養生節奏、家庭陪伴、晚年生活品質與精神傳承。
-- 若屬於「青壯年衝刺期」：則聚焦於事業定位、知識資產化、財富槓桿與精力邊界管理。
+【動態生命階段適配】
+當事人的生辰計算出其目前大約為 **{calculated_age} 歲**，
+其生命階段屬於：**{life_stage_desc}**。
+請依此調整分析重心：
+- 學習階段：降低事業與財富擴張比重，增加學業、知識吸收、同儕人際與家庭支持。
+- 退休與養老階段：降低職場衝刺，增加健康、家庭陪伴、生活品質與精神傳承。
+- 青壯年衝刺期：聚焦事業定位、知識資產化、財富槓桿與精力邊界。
 
-【排版與視覺化強烈要求（絕對防止字元錯位）】
-1. **嚴禁使用任何半形字元拼湊 ASCII 藝術樹狀圖或線條圖**（例如：絕對禁止使用 `└─`、`│`、`├─`、`┬`、`+-->` 等符號來畫關係圖），因為在不同裝置與字型下會嚴重錯位。
-2. 關係與交叉比對請改用**清晰的 Markdown 結構化清單、條列式重點或 Markdown 表格**來表達。
-3. 請在內文中適當運用 Markdown 語法、色彩提示區塊（例如利用引述區塊 `>` 代表核心金句或重要觀點）、圖示 ICON（如 🎯、💡、⚠️、📌、⚖️、🚀）將專業洞察完美呈現。
+【分析深度要求】
+不要只把命盤資料逐項翻譯成性格形容詞。
+請進行真正的「交叉推理」，尤其尋找：
+1. 多個系統反覆出現的共同人格訊號。
+2. 不同系統互相矛盾、但可能形成複合人格的地方。
+3. 天賦與弱點其實來自同一個核心特質的情況。
+4. 命理描述與 MBTI 若一致，說明為何一致；若不一致，分析差異。
+5. 哪些結論資料支持較強，哪些只能視為低信度推論。
+6. 把抽象命理訊號翻譯成現實中的行為模式、決策模式、人際模式與風險。
 
-【分析架構與規範嚴格要求】
-1. **【命盤與心理總論】**：先從八字、紫微、西洋占星、人類圖以及心理模型各自抓出核心人格、天賦、弱點與人生主題。
-2. **【四系統交叉比對】**：比較命理系統是否反覆指向相同特質。重點找：共同天賦、共同矛盾、共同風險、不同系統之間的差異。最後整合成一個「核心人格／命格與心理定位」（請以條列式說明，絕對不准用任何 ASCII 樹狀線條圖）。
-3. **【六大人生領域】**：依序分析：事業、財富、感情／婚姻、健康／能量、家庭／人際、接下來五年的人生趨勢（含今年 2026 沒過完的至 2030 年，並嚴格對應上述的「生命階段分析重心」，其中家庭部分涵蓋父母、長輩與手足）。每一個領域都必須採用：「八字/命理 → 心理機制 → 四系統交叉結論 → 實際策略」的結構。
-4. **【命理與心理翻譯成現實】**：不要只講術語。每個重要訊號都要轉換成：「特徵／機制 → 人格傾向 → 現實優勢 → 潛在風險 → 實際做法」。
-5. **【時間軸】**：針對接下來五年（2026–2030）的人生趨勢，由於缺少大運與流年細節，切勿假裝精準預測每年事件，改以「階段性五年戰略藍圖」來規劃。
-6. **【最後總結】**：總結核心定位、最強5項優勢、最重要5項盲點、最適合的事業模式、最適合的財富模式、感情核心課題、最大人生風險、未來最重要的策略。
+【排版要求】
+1. 嚴禁 ASCII 藝術樹狀圖或線條圖。
+2. 使用 Markdown 標題、條列、表格與引用區塊。
+3. 可以使用 🎯、💡、⚠️、📌、⚖️、🚀 等圖示。
+4. 不要過度使用空泛的正面形容詞。
+5. 對重要結論請給出「為什麼」與「現實上怎麼做」。
 
-【嚴格分析原則】
+【報告架構】
+一、【命盤與心理總論】
+分別抓出八字、紫微、西洋占星、人類圖與 MBTI（若有）的核心訊號。
+
+二、【四系統交叉比對】
+請用表格整理：
+- 共同天賦
+- 共同盲點
+- 共同風險
+- 系統之間的矛盾
+- 最值得重視的核心人格結論
+
+三、【六大人生領域】
+依序分析：
+1. 事業
+2. 財富
+3. 感情／婚姻
+4. 健康／能量
+5. 家庭／人際
+6. 2026–2030 五年人生策略
+
+每一個領域都使用：
+「命理訊號 → 心理機制 → 四系統交叉結論 → 現實策略」
+
+四、【命理翻譯成現實】
+對最重要的訊號逐項說明：
+「特徵／機制 → 人格傾向 → 現實優勢 → 潛在風險 → 實際做法」
+
+五、【2026–2030 五年戰略藍圖】
+因目前資料沒有完整大運與流年細節，
+不要假裝精準預測某一年一定發生某件事。
+請以階段性策略、可能的主題與應對原則呈現。
+
+六、【最終決策摘要】
+最後明確列出：
+- 最強 5 項優勢
+- 最重要 5 項盲點
+- 最適合的事業模式
+- 最適合的財富模式
+- 感情核心課題
+- 最大人生風險
+- 未來最重要的 5 個策略
+- 一句最值得當事人記住的核心結論
+
+【嚴格資料原則】
 - 以提供的排盤資料為主要依據，不自行補充不存在的資料。
-- 不把命理當成科學事實，將其視為人格與決策參考模型。
-- 重點是「命理結構與心理交叉後得到什麼共同結論」。
-- 語調溫暖、專業、客觀、一針見血，嚴禁裝熟、稱兄道弟或使用人工嗨口吻。
+- 不把命理當成科學事實。
+- 不為了讓四個系統「看起來一致」而強行解釋。
+- 如果資料不足，直接說「資料不足」。
+- 語調溫暖、專業、客觀、一針見血。
+- 嚴禁裝熟、稱兄道弟或人工嗨口吻。
 
 【結構化模型特徵資料】
 {json.dumps(full_chart_summary, ensure_ascii=False, indent=2)}
 
-請以 Markdown 格式輸出結構清晰、論述深刻的四系統交叉分析報告：
+請以 Markdown 格式輸出完整、深度、可實際使用的分析報告。
 """
-        # 呼叫動態狀態回饋的 AI 模組
-        gemini_res = call_gemini_api_dynamic(prompt, gemini_keys, status_placeholder)
-        
-        # 更新最後執行時間戳記以啟動 10 秒冷卻
+
+        status_placeholder.info("⏳ **雙 AI 正在同時進行獨立分析，請稍候……**")
+
+        # 同時呼叫 Gemini + OpenAI，縮短整體等待時間
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            gemini_future = executor.submit(
+                call_gemini_api_dynamic, prompt, gemini_keys, None
+            )
+            openai_future = executor.submit(call_openai_api, prompt)
+
+            gemini_res = gemini_future.result()
+            openai_res = openai_future.result()
+
         st.session_state.last_exec_time = py_time.time()
-        
-        status_placeholder.success("✅ **AI 處理狀態：報告生成完畢！**")
-        
+
+        gemini_ok = bool(gemini_res and not gemini_res.startswith("### ❌"))
+        openai_ok = bool(openai_res and not openai_res.startswith("### ❌"))
+
+        if gemini_ok and openai_ok:
+            status_placeholder.success(
+                "✅ **雙 AI 分析完成！Gemini 與 OpenAI 均已返回結果。**"
+            )
+        elif gemini_ok or openai_ok:
+            status_placeholder.warning(
+                "⚠️ **部分完成：其中一個 AI 已完成，另一個 AI 呼叫失敗。**"
+            )
+        else:
+            status_placeholder.error(
+                "❌ **雙 AI 均未能完成分析，請檢查 Secrets 與 API 額度。**"
+            )
+
         st.session_state.gemini_report = gemini_res
-        st.session_state.export_text = f"""# 命理詳算報告
+        st.session_state.openai_report = openai_res
+
+        st.session_state.export_text = f"""# 命理雙 AI 詳算報告
 生成時間：{datetime.now().strftime("%Y-%m-%d %H:%M")}
 命盤生辰設定：{birth_dt.strftime("%Y-%m-%d %H:%M")} ({lunar_str})
 出生地點：{input_location if input_location else "未指定"}
 性別設定：{input_gender}
 計算年齡：約 {calculated_age} 歲 ({life_stage_desc})
 MBTI 類型：{input_mbti if input_mbti else "未填寫"}
-特別關注：{input_focus_custom if input_focus_custom else "無特別指定"}
-使用者回饋：{input_feedback if input_feedback else "無"}
 
 ==================================================
 【原始排盤與心理結構化數據】
 {json.dumps(full_chart_summary, ensure_ascii=False, indent=2)}
 
 ==================================================
-【GEMINI 專家深度專家詳解報告】
+【GEMINI 獨立深度分析】
 {gemini_res}
+
+==================================================
+【OPENAI 獨立深度分析】
+{openai_res}
 """
         st.rerun()
 
-if st.session_state.gemini_report:
-    st.markdown("### 📜 Gemini 專家四系統交叉深度詳算報告")
-    with st.container():
-        st.markdown(st.session_state.gemini_report)
+if st.session_state.gemini_report or st.session_state.openai_report:
+    st.markdown("### 📜 雙 AI 專家四系統交叉深度詳算報告")
+
+    report_tab_gemini, report_tab_openai = st.tabs(
+        ["🟢 Gemini 分析", "🟣 OpenAI 分析"]
+    )
+
+    with report_tab_gemini:
+        if st.session_state.gemini_report:
+            st.markdown(st.session_state.gemini_report)
+        else:
+            st.error("Gemini 本次沒有取得有效結果。")
+
+    with report_tab_openai:
+        if st.session_state.openai_report:
+            st.markdown(st.session_state.openai_report)
+        else:
+            st.error("OpenAI 本次沒有取得有效結果。")
+
+    st.divider()
+    st.markdown("### 🔎 雙 AI 使用方式")
+    st.info(
+        "Gemini 與 OpenAI 會使用相同的命盤資料，但各自獨立推理。"
+        "不要把兩份結果視為誰一定正確；比較兩者的共識、分歧與不同推理角度，"
+        "通常比只看單一 AI 更有價值。"
+    )
